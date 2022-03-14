@@ -3,6 +3,7 @@ A python implementation of Supersingular Isogeny Key Exchange (SIKE) using the o
 
 A brief foray into the internet indicated that there are no publically available implementations of SIKE in python. This is intended solely for educational purposes. Using the reference library available at https://sike.org for the official implementation.
 
+The code is adapted from an out of date implementation. See https://github.com/nurdymuny/SIDH
 
 #TO DO
 - Add parameters for SIKEp434, p503, p610, p751

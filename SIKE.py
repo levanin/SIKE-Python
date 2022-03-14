@@ -3,7 +3,7 @@
 # Starting curve is assumed to be (A:C) = (6:1) i.e.  y^2 = x^3 + 6x^2 + x
 # See https://sike.org/files/SIDH-spec.pdf
 # Date: March 2022
-# Adapted by Shai Levin
+# Adapted by levanin
 
 # Implementation should work for any SIKE parameters but only p182 parameters are currently included (insecure!)
 # p182 parameters sourced from https://github.com/microsoft/SIKE-challenges
@@ -16,7 +16,7 @@
 
 class Complex(object):
 	# Class for complex numbers
-	# Added division functionality - Shai
+	# Added division functionality
 
 	def __init__(self, real, imag=0):
 		self.re = int(real)
