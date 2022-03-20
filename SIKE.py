@@ -12,7 +12,8 @@
 # which is based on code from https://github.com/Microsoft/PQCrypto-SIDH
 # by Costello, Longa, Naehrig (Microsoft Research)
 
-
+from collections import deque
+import cProfile
 
 class Complex(object):
 	# Class for complex numbers
@@ -451,6 +452,219 @@ def get_A(xP, xQ, xR):
 	return A                 #cost: 4M+1S+7a+1I
 ##########################################################################
 
+def iso_2_e(A24, C24, RX, RZ, points=None):
+	#inputs: curve constants (A24: C24) where (A24 : C24) = (A + 2C : 4C) for projective curve (A:C) and a torsion point RX, RZ of order eA
+	#optional input: a list of torsion points to push through the isogenies
+	#output: image curve, and optional image of torsion points on that curve
+	#counters
+	iso, push = 0, 0
+
+	is_points = 0 if points is None else 1
+	e2 = eA
+
+	if points:
+		phiPX, phiPZ = points[0][0], points[0][1]
+		phiQX, phiQZ = points[1][0], points[1][1]
+		phiDX, phiDZ = points[2][0], points[2][1]
+
+	# if e is odd, compute the first isogeny - (which must be a 2 isogeny)
+	if (eA % 2) == 1:
+		TX, TZ = xDBLe(RX,RZ, A24, C24, e2-1)
+		A24, C24 = get_2_isog(TX, TZ)
+		RX, RZ = eval_2_isog(TX, TZ, RX, RZ)
+		if is_points:
+			phiPX, phiPZ = eval_2_isog(TX, TZ, phiPX, phiPZ) #P=phi(P)
+			phiQX, phiQZ = eval_2_isog(TX, TZ, phiQX, phiQZ) #Q=phi(Q)
+			phiDX, phiDZ = eval_2_isog(TX, TZ, phiDX, phiDZ) #D=phi(D)
+			push = push + 3
+		e2 = e2 - 1 #remove the first isogeny
+		iso = iso + 1
+
+	#Alice's main loop
+	for e in range(e2 -2,-2,-2):
+		# multiply the kernel point by it's order minus 4
+		TX, TZ = xDBLe(RX,RZ, A24, C24 ,e) 
+		# get the next isogeny - image curve and map parameters
+		A24, C24, consts = get_4_isog(TX, TZ)
+		iso = iso + 1
+		if e != 0:
+			RX, RZ = eval_4_isog(consts, RX, RZ)
+			push = push + 1
+
+		#evaluate 4-isogeny at Bob's points		
+		if is_points:
+			phiPX, phiPZ = eval_4_isog(consts, phiPX, phiPZ) #P=phi(P)
+			phiQX, phiQZ = eval_4_isog(consts, phiQX, phiQZ) #Q=phi(Q)
+			phiDX, phiDZ = eval_4_isog(consts, phiDX, phiDZ) #D=phi(D)
+			push = push + 3
+	if is_points:
+		points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
+	return A24, C24, points, iso, push
+
+def iso_2_e_with_strategies(A24, C24, RX, RZ, points=None):
+	#Optimised version of function above with strategies
+	#inputs: curve constants (A24: C24) where (A24 : C24) = (A + 2C : 4C) for projective curve (A:C) and a torsion point RX, RZ of order eA
+	#optional input: a list of torsion points to push through the isogenies
+	#output: image curve, and optional image of torsion points on that curve
+	#counters
+	iso, push = 0, 0
+
+	is_points = 0 if points is None else 1
+	e2 = eA
+
+	if points:
+		phiPX, phiPZ = points[0][0], points[0][1]
+		phiQX, phiQZ = points[1][0], points[1][1]
+		phiDX, phiDZ = points[2][0], points[2][1]
+
+	# if e is odd, compute the first isogeny - (which must be a 2 isogeny)
+	if (eA % 2) == 1:
+		TX, TZ = xDBLe(RX,RZ, A24, C24, e2-1)
+		A24, C24 = get_2_isog(TX, TZ)
+		RX, RZ = eval_2_isog(TX, TZ, RX, RZ)
+		if is_points:
+			phiPX, phiPZ = eval_2_isog(TX, TZ, phiPX, phiPZ) #P=phi(P)
+			phiQX, phiQZ = eval_2_isog(TX, TZ, phiQX, phiQZ) #Q=phi(Q)
+			phiDX, phiDZ = eval_2_isog(TX, TZ, phiDX, phiDZ) #D=phi(D)
+			push = push + 3
+		e2 = e2 - 1 #remove the first isogeny
+		iso = iso + 1
+
+	iso_queue = deque()
+	iso_queue.append((e2/2, RX, RZ))
+	i = 0
+
+	#Alice's main loop - note that iso_queue returns True if non-empty
+	while iso_queue:
+		h, X, Z = iso_queue.pop()
+
+		# Check for valid strategy
+		assert h == 1 or strategy_Alice[i] < h, "Alice's strategy is invalid."
+
+		if h == 1:
+			A24, C24, consts = get_4_isog(X, Z)
+			iso = iso + 1
+			iso_queue_2 = deque()
+			while iso_queue:
+				h, X, Z = iso_queue.popleft()
+				X, Z = eval_4_isog(consts, X, Z)
+				iso = iso + 1
+				iso_queue_2.append((h-1, X, Z))
+			iso_queue = iso_queue_2
+			if is_points:
+				phiPX, phiPZ = eval_4_isog(consts, phiPX, phiPZ) #P=phi(P)
+				phiQX, phiQZ = eval_4_isog(consts, phiQX, phiQZ) #Q=phi(Q)
+				phiDX, phiDZ = eval_4_isog(consts, phiDX, phiDZ) #D=phi(D)
+				push = push + 3
+
+		else:
+			iso_queue.append((h, X, Z))
+			X, Z = xDBLe(X, Z, A24, C24, 2*strategy_Alice[i])
+			iso_queue.append((h-strategy_Alice[i], X, Z))
+			i = i+1
+
+	if is_points:
+		points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
+	return A24, C24, points, iso, push
+
+def iso_3_e(APLUS, AMINUS, RX, RZ, points=None):
+	#inputs: curve constants (APLUS: AMINUS) where (APLUS : AMINUS) = (A + 2C : A - 2C) for projective curve (A:C) and a torsion point RX, RZ of order eB
+	#optional input: a list of torsion points to push through the isogenies
+	#output: image curve, and optional image of torsion points on that curve
+	
+	# counters
+	iso, push = 0, 0
+
+	is_points = 0 if points is None else 1
+
+	#Number of 3-isogenies to compute
+	e3 = eB
+
+	if points:
+		phiPX, phiPZ = points[0][0], points[0][1]
+		phiQX, phiQZ = points[1][0], points[1][1]
+		phiDX, phiDZ = points[2][0], points[2][1]
+
+	#Bob's main loop
+	for e in reversed(range(e3)):
+		# multiply the kernel point by it's order less 1
+		TX, TZ = xTPLe(RX,RZ, APLUS, AMINUS ,e) 
+		# get the next isogeny - image curve and map parameters
+		APLUS, AMINUS, consts = get_3_isog(TX, TZ)
+		iso = iso + 1
+		if e != 0:
+			RX, RZ = eval_3_isog(consts, RX, RZ)
+			
+			push = push + 1
+		if is_points:
+			#evaluate 3-isogeny at Alice's points		
+			phiPX, phiPZ = eval_3_isog(consts, phiPX, phiPZ) #P=phi(P)
+			phiQX, phiQZ = eval_3_isog(consts, phiQX, phiQZ) #Q=phi(Q)
+			phiDX, phiDZ = eval_3_isog(consts, phiDX, phiDZ) #D=phi(D)
+			push = push + 3
+	
+	if is_points:
+		points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
+	return APLUS, AMINUS, points, iso, push
+	
+def iso_3_e_with_strategies(APLUS, AMINUS, RX, RZ, points=None):
+	#inputs: curve constants (APLUS: AMINUS) where (APLUS : AMINUS) = (A + 2C : A - 2C) for projective curve (A:C) and a torsion point RX, RZ of order eB
+	#optional input: a list of torsion points to push through the isogenies
+	#output: image curve, and optional image of torsion points on that curve
+	
+	# counters
+	iso, push = 0, 0
+
+	is_points = 0 if points is None else 1
+
+	#Number of 3-isogenies to compute
+	e3 = eB
+
+	if points:
+		phiPX, phiPZ = points[0][0], points[0][1]
+		phiQX, phiQZ = points[1][0], points[1][1]
+		phiDX, phiDZ = points[2][0], points[2][1]
+
+	iso_queue = deque()
+	iso_queue.append((e3, RX, RZ))
+	i = 0
+
+	#Bob's main loop - note that iso_queue returns True if non-empty
+	while iso_queue:
+		h, X, Z = iso_queue.pop()
+
+		# Check for valid strategy
+		assert h == 1 or strategy_Bob[i] < h, "Bob's strategy is invalid."
+
+		if h == 1:
+			APLUS, AMINUS, consts = get_3_isog(X, Z)
+			iso = iso + 1
+			iso_queue_2 = deque()
+			while iso_queue:
+				h, X, Z = iso_queue.popleft()
+				X, Z = eval_3_isog(consts, X, Z)
+				iso = iso + 1
+				iso_queue_2.append((h-1, X, Z))
+			iso_queue = iso_queue_2
+			if is_points:
+				phiPX, phiPZ = eval_3_isog(consts, phiPX, phiPZ) #P=phi(P)
+				phiQX, phiQZ = eval_3_isog(consts, phiQX, phiQZ) #Q=phi(Q)
+				phiDX, phiDZ = eval_3_isog(consts, phiDX, phiDZ) #D=phi(D)
+				push = push + 3
+		else:
+			iso_queue.append((h, X, Z))
+			X, Z = xTPLe(X, Z, APLUS, AMINUS, strategy_Bob[i])
+			iso_queue.append((h-strategy_Bob[i], X, Z))
+			i = i+1
+	
+	if is_points:
+		points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
+	return APLUS, AMINUS, points, iso, push
+
+
+
+##########################################################################
+
 	
 
 #KEYGEN
@@ -467,6 +681,7 @@ def keygen_Alice(SK_Alice, params_Alice, params_Bob):
 	phiQZ = Complex(1)
 	phiDX, phiDZ = params_Bob[2], Complex(1)  #(phiDX:phiDZ)=x(Q-P)
 	
+	points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
 	#special curve representation used for 2 isogenies (A:C) ~ (A24: C24) = (A+2C:4C)
 
 	A24 = A+(Complex(2)*C) 
@@ -476,37 +691,15 @@ def keygen_Alice(SK_Alice, params_Alice, params_Bob):
 
 	#compute the point x(R)=(RX:RZ) via secre_pt, R=P+[SK_Alice]Q
 	RX, RZ = LADDER_3_pt(SK_Alice, params_Alice[0], params_Alice[1], params_Alice[2], A)
-	#counters
-	iso, push = 0, 0
 
-	# if e is odd, compute the first isogeny - (which must be a 2 isogeny)
-	if (eA % 2) == 1:
-		TX, TZ = xDBLe(RX,RZ, A24, C24, e2-1)
-		A24, C24 = get_2_isog(TX, TZ)
-		RX, RZ = eval_2_isog(TX, TZ, RX, RZ)
-		phiPX, phiPZ = eval_2_isog(TX, TZ, phiPX, phiPZ) #P=phi(P)
-		phiQX, phiQZ = eval_2_isog(TX, TZ, phiQX, phiQZ) #Q=phi(Q)
-		phiDX, phiDZ = eval_2_isog(TX, TZ, phiDX, phiDZ) #D=phi(D)
-		e2 = e2 - 1 #remove the first isogeny
-		iso = iso + 1
-		push = push + 3
-	#Alice's main loop
-	for e in range(e2 -2,-2,-2):
-		# multiply the kernel point by it's order minus 4
-		TX, TZ = xDBLe(RX,RZ, A24, C24 ,e) 
-		# get the next isogeny - image curve and map parameters
-		A24, C24, consts = get_4_isog(TX, TZ)
-
-		if e != 0:
-			RX, RZ = eval_4_isog(consts, RX, RZ)
-			
-			iso = iso + 1
-					#evaluate 4-isogeny at Bob's points		
-		phiPX, phiPZ = eval_4_isog(consts, phiPX, phiPZ) #P=phi(P)
-		phiQX, phiQZ = eval_4_isog(consts, phiQX, phiQZ) #Q=phi(Q)
-		phiDX, phiDZ = eval_4_isog(consts, phiDX, phiDZ) #D=phi(D)
-		push = push + 3
+	#Compute isogenies on base curve and points with kernel RX, RZ
+	A24, C24, points, iso, push = iso_2_e_with_strategies(A24, C24, RX, RZ, points)
 	
+
+	phiPX, phiPZ = points[0][0], points[0][1]
+	phiQX, phiQZ = points[1][0], points[1][1]
+	phiDX, phiDZ = points[2][0], points[2][1]
+
 
 	#compute affine x-coordinates
 	phiPZ, phiQZ, phiDZ = inv_3_way(phiPZ, phiQZ, phiDZ)
@@ -540,30 +733,11 @@ def keyex_Alice(sk_Alice, pk_Bob):
 	# Compute Alice's secret torsion point via Bob's pushthrough points
 	SX, SZ = LADDER_3_pt(sk_Alice, pk_Bob[0], pk_Bob[1], pk_Bob[2], A)
 
-	#counters
-	iso, push = 0, 0
+	A24, C24, _, iso, _ = iso_2_e_with_strategies(A24, C24, SX, SZ)
 
-
-	# if e is odd, compute the first isogeny - (which must be a 2 isogeny)
-	if (eA % 2) == 1:
-		TX, TZ = xDBLe(SX,SZ, A24, C24, e2-1)
-		A24, C24 = get_2_isog(TX, TZ)
-		SX, SZ = eval_2_isog(TX, TZ, SX, SZ)
-		e2 = e2 - 1 #remove the first isogeny
-		iso = iso + 1
-
-	#Alice's main loop
-	for e in range(e2 -2,-2,-2):
-		# multiply the kernel point by it's order less 2
-		TX, TZ = xDBLe(SX,SZ, A24, C24 ,e) 
-		# get the next 4 isogeny - image curve and map parameters
-		A24, C24, consts = get_4_isog(TX, TZ)
-
-		if e != 0:
-			SX, SZ = eval_4_isog(consts, SX, SZ)
-			
-			iso = iso + 1
-					#evaluate 4-isogeny at Bob's points		
+	msg="Alice's key exchange needs "+str(iso)+" isogenies"
+	print(msg)
+	print('')
 
 	A = (Complex(4)*A24) - (Complex(2)*C24)
 	C = C24
@@ -577,42 +751,27 @@ def keygen_Bob(sk_Bob, params_Bob, params_Alice):
 	#output: Bob's public key [phi_B(x(PA)),phi_B(x(QA)),phi_B(x(QA-PA))] 
 	
 	A, C = Complex(6), Complex(1) #starting montgomery curve
+
 	phiPX, phiPZ = params_Alice[0], Complex(1)  #Alice's starting points -> public key
 	phiQX, phiQZ = params_Alice[1], Complex(1)
 	phiDX, phiDZ = params_Alice[2], Complex(1)  #(phiDX:phiDZ)=x(Q-P)
-	
-	#special curve representation used for 2 isogenies (A:C) ~ (A24: C24) = (A+2C:4C)
+
+	points = [[phiPX, phiPZ], [phiQX, phiQZ], [phiDX, phiDZ]]
+
+	#special curve representation used for 3 isogenies (A:C) ~ (APLUS: AMINUS) = (A+2C:A-2C)
 
 	APLUS = A + Complex(2) * C
 	AMINUS = A - Complex(2) * C
 
-	#Number of 3-isogenies to compute
-	e3 = eB
-
 	#compute the point x(R)=(RX:RZ) via 3 pt ladder, R=P+[sk_Bob]Q
 	RX, RZ = LADDER_3_pt(sk_Bob, params_Bob[0], params_Bob[1], params_Bob[2], A)
 	
-	#counters
-	iso, push = 0, 0
+	APLUS, AMINUS, points, iso, push = iso_3_e_with_strategies(APLUS, AMINUS, RX, RZ, points)
 
-	#Bob's main loop
-	for e in reversed(range(e3)):
-		# multiply the kernel point by it's order less 1
-		TX, TZ = xTPLe(RX,RZ, APLUS, AMINUS ,e) 
-		# get the next isogeny - image curve and map parameters
-		APLUS, AMINUS, consts = get_3_isog(TX, TZ)
-
-		if e != 0:
-			RX, RZ = eval_3_isog(consts, RX, RZ)
-			
-			iso = iso + 1
-					#evaluate 3-isogeny at Alice's points		
-		phiPX, phiPZ = eval_3_isog(consts, phiPX, phiPZ) #P=phi(P)
-		phiQX, phiQZ = eval_3_isog(consts, phiQX, phiQZ) #Q=phi(Q)
-		phiDX, phiDZ = eval_3_isog(consts, phiDX, phiDZ) #D=phi(D)
-		push = push + 3
+	phiPX, phiPZ = points[0][0], points[0][1]
+	phiQX, phiQZ = points[1][0], points[1][1]
+	phiDX, phiDZ = points[2][0], points[2][1]
 	
-
 	#compute affine x-coordinates
 	phiPZ, phiQZ, phiDZ = inv_3_way(phiPZ, phiQZ, phiDZ)
 	phiPX = phiPX * phiPZ
@@ -634,33 +793,31 @@ def keygen_Bob(sk_Bob, params_Bob, params_Alice):
 ##################################################################################
 
 def keyex_Bob(sk_Bob, pk_Alice):
-#Order of 3-torsion
+	#Order of 3-torsion
 	e3 = eB
 
 	A, C = get_A(pk_Alice[0], pk_Alice[1], pk_Alice[2]), Complex(1)
+
+	#special curve representation used for 3 isogenies (A:C) ~ (APLUS: AMINUS) = (A+2C:A-2C)
 	APLUS = A + Complex(2) * C
 	AMINUS = A - Complex(2) * C
 	
 	# Compute Bob's secret torsion point via Alice's pushthrough points
 	RX, RZ = LADDER_3_pt(sk_Bob, pk_Alice[0], pk_Alice[1], pk_Alice[2], A)
 
-	#counters
-	iso = 0
+	# Compute Bob's image curve
+	APLUS, AMINUS, _, iso, _ = iso_3_e_with_strategies(APLUS, AMINUS, RX, RZ)
 
-	#Bob's main loop
-	for e in reversed(range(e3)):
-		# multiply the kernel point by it's order minus 4
-		TX, TZ = xTPLe(RX,RZ, APLUS, AMINUS ,e) 
-		# get the next isogeny - image curve and map parameters
-		APLUS, AMINUS, consts = get_3_isog(TX, TZ)
+	
 
-		if e != 0:
-			RX, RZ = eval_3_isog(consts, RX, RZ)
-			iso = iso + 1
-					#evaluate 4-isogeny at Bob's points		
 	inv2 = Complex(2).inv()
 	A = (APLUS + AMINUS) * inv2
 	C = (APLUS - A) * inv2
+
+	msg="Bob's key exchange needs "+str(iso)+" isogenies"
+	print(msg)
+	print('')
+
 	return j_inv(A,C)
 
 ##################################################################################
@@ -698,8 +855,11 @@ params_Bob = [XPB, XQB, XRB]
 
 
 #################################################################
-#strategy paramaters NOT CURRENTLY IMPLEMENTED##
-# TO DO - add strategy functionality
+#strategy paramaters - generated strategies using strategies.py for given parameters
+
+#p182 
+strategy_Alice = [17, 12, 7, 4, 2, 1, 1, 1, 2, 1, 1, 3, 2, 1, 1, 1, 1, 5, 3, 2, 1, 1, 1, 1, 2, 1, 1, 1, 7, 4, 2, 2, 1, 1, 1, 2, 1, 1, 3, 2, 1, 1, 1, 1]
+strategy_Bob = [21, 13, 8, 5, 3, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 3, 2, 1, 1, 1, 1, 1, 5, 3, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 8, 5, 3, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 3, 2, 1, 1, 1, 1, 1]
 
 
 # #######################################################################
