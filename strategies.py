@@ -21,4 +21,4 @@ def compute_strategy(ell, e):
 
         return S[n], C[n]
 
-print(compute_strategy(3, 0x39))
+print(compute_strategy(3, 0x89))
